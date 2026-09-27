@@ -398,6 +398,72 @@ fn test_get_application_by_index() {
     assert_eq!(client.get_application_by_index(&pool_id, &2), None);
 }
 
+#[test]
+fn test_get_application_tracks_submission_approval_and_pool_student_isolation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(Contract, ());
+    let client = ContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let school = Address::generate(&env);
+    client.set_admin(&admin);
+    client.register_school(&school, &BytesN::from_array(&env, &[1u8; 32]));
+
+    let creator = Address::generate(&env);
+    let pool_id = client.create_pool_for_school(
+        &creator,
+        &String::from_str(&env, "Application Pool"),
+        &String::from_str(&env, "Applications"),
+        &1_000_000u128,
+        &school,
+        &100_000u64,
+    );
+    let second_pool_id = client.create_pool_for_school(
+        &creator,
+        &String::from_str(&env, "Second Pool"),
+        &String::from_str(&env, "Separate applications"),
+        &1_000_000u128,
+        &school,
+        &100_000u64,
+    );
+
+    let student = Address::generate(&env);
+    let other_student = Address::generate(&env);
+    assert_eq!(client.get_application(&pool_id, &student), None);
+
+    let submitted_data = String::from_str(&env, "Need-based scholarship application");
+    client.apply_to_pool(&pool_id, &student, &submitted_data);
+    client.apply_to_pool(&pool_id, &other_student, &String::from_str(&env, "Other student"));
+    client.apply_to_pool(
+        &second_pool_id,
+        &student,
+        &String::from_str(&env, "Second pool application"),
+    );
+
+    let submitted = client.get_application(&pool_id, &student).unwrap();
+    assert_eq!(submitted.pool_id, pool_id);
+    assert_eq!(submitted.student, student);
+    assert_eq!(submitted.application_data, submitted_data);
+    assert_eq!(submitted.status, String::from_str(&env, "Pending"));
+    assert_eq!(submitted.approved_amount, 0);
+    assert_eq!(submitted.amount_claimed, 0);
+
+    client.approve_application(&pool_id, &school, &student, &true);
+
+    let approved = client.get_application(&pool_id, &student).unwrap();
+    assert_eq!(approved.status, String::from_str(&env, "Approved"));
+    assert_eq!(approved.application_data, submitted_data);
+    assert_eq!(
+        client.get_application(&pool_id, &other_student).unwrap().status,
+        String::from_str(&env, "Pending")
+    );
+    assert_eq!(
+        client.get_application(&second_pool_id, &student).unwrap().status,
+        String::from_str(&env, "Pending")
+    );
+}
+
 // ============= PROTOCOL FEES TESTS =============
 
 #[test]

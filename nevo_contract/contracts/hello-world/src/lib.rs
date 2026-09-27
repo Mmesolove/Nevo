@@ -190,6 +190,10 @@ pub fn set_deadline(deadline: u64) -> Result<(), &'static str> {
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Application {
+    pub pool_id: u32,
+    pub student: Address,
+    pub application_data: String,
+    pub status: String,
     /// The total amount the student is approved to receive from this pool.
     pub approved_amount: i128,
     /// Running total of funds already disbursed to the student.
@@ -803,9 +807,27 @@ impl Contract {
         app_count += 1;
 
         let app_key = (Symbol::new(&env, APPLICATION_PREFIX), pool_id, app_count);
-        env.storage()
-            .persistent()
-            .set(&app_key, &(app_count, student.clone(), application_data));
+        env.storage().persistent().set(
+            &app_key,
+            &(app_count, student.clone(), application_data.clone()),
+        );
+
+        let application_key = (
+            Symbol::new(&env, CLAIMED_AMOUNT_PREFIX),
+            pool_id,
+            student.clone(),
+        );
+        env.storage().persistent().set(
+            &application_key,
+            &Application {
+                pool_id,
+                student: student.clone(),
+                application_data,
+                status: String::from_str(&env, "Pending"),
+                approved_amount: 0,
+                amount_claimed: 0,
+            },
+        );
 
         env.storage().persistent().set(&applicant_key, &true);
         env.storage().persistent().set(&count_key, &app_count);
@@ -920,6 +942,22 @@ impl Contract {
             student.clone(),
         );
         env.storage().persistent().set(&status_key, &status);
+
+        let application_key = (
+            Symbol::new(&env, CLAIMED_AMOUNT_PREFIX),
+            pool_id,
+            student,
+        );
+        if let Some(mut application) = env
+            .storage()
+            .persistent()
+            .get::<_, Application>(&application_key)
+        {
+            application.status = status;
+            env.storage()
+                .persistent()
+                .set(&application_key, &application);
+        }
     }
 
     /// Get application status for a student in a pool.
@@ -957,7 +995,7 @@ impl Contract {
     }
 
     /// Get the full Application record for a student in a pool.
-    /// Returns `None` if the student has not yet made any claim.
+    /// Returns `None` if the student has not applied to the pool.
     pub fn get_application(env: Env, pool_id: u32, student: Address) -> Option<Application> {
         let app_key = (
             Symbol::new(&env, CLAIMED_AMOUNT_PREFIX),
@@ -1036,6 +1074,10 @@ impl Contract {
                         .persistent()
                         .get::<_, Application>(&claim_key)
                         .unwrap_or(Application {
+                            pool_id,
+                            student: student.clone(),
+                            application_data: String::from_str(&env, ""),
+                            status: status.clone(),
                             approved_amount: 0,
                             amount_claimed: 0,
                         });
@@ -1140,9 +1182,17 @@ impl Contract {
             .persistent()
             .get::<_, Application>(&app_key)
             .unwrap_or(Application {
+                pool_id,
+                student: student.clone(),
+                application_data: String::from_str(&env, ""),
+                status: Self::get_application_status(env.clone(), pool_id, student.clone()),
                 approved_amount: collected,
                 amount_claimed: 0,
             });
+
+        if application.approved_amount == 0 {
+            application.approved_amount = collected;
+        }
 
         // Enforce the partial-payment invariant
         if application.amount_claimed + claim_amount > collected {
